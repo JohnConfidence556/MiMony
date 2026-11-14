@@ -34,6 +34,10 @@ def init_db():
             data TEXT NOT NULL
         );
         """)
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def get_or_create_user(user_id):
@@ -92,6 +96,26 @@ def get_debts(user_id):
             (user_id, user_id),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def set_plan(user_id, plan, customer_id=None):
+    with get_conn() as conn:
+        conn.execute("INSERT OR IGNORE INTO users (id) VALUES (?)", (user_id,))
+        if customer_id:
+            conn.execute(
+                "UPDATE users SET plan = ?, stripe_customer_id = ? WHERE id = ?",
+                (plan, customer_id, user_id),
+            )
+        else:
+            conn.execute("UPDATE users SET plan = ? WHERE id = ?", (plan, user_id))
+
+
+def set_plan_by_customer(customer_id, plan):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE users SET plan = ? WHERE stripe_customer_id = ?",
+            (plan, customer_id),
+        )
 
 
 if __name__ == "__main__":

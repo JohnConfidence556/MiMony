@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import payments
 
 import db
 import voice
@@ -60,8 +61,9 @@ def debts_reply(user):
     for d in debts:
         days = (datetime.now() - datetime.fromisoformat(d["since"])).days
         lines.append(f"{d['customer']} {naira(d['owed'])} ({days} days)")
-    if user["plan"] == "free":
-        lines.append("Upgrade to Premium and I will remind them for you.")
+        if user["plan"] == "free":
+            lines.append("Upgrade to Premium and I will remind them for you:")
+            lines.append(payments.upgrade_link(user["id"]))
     return "\n".join(lines)
 
 
@@ -124,6 +126,14 @@ def summary_reply(user, period):
     return "\n".join(lines)
 
 
+def upgrade_reply(user):
+    if user["plan"] == "premium":
+        return "You are already on Premium."
+    return (
+        "Premium unlocks debt reminders and PDF invoices. Pay securely with Stripe:\n"
+        + payments.upgrade_link(user["id"])
+    )
+
 def handle_message(user_id: str, text: str) -> str:
     user = db.get_or_create_user(user_id)
     text = text.strip()
@@ -135,6 +145,9 @@ def handle_message(user_id: str, text: str) -> str:
     period = summary_period(text)
     if period:
         return summary_reply(user, period)
+
+    if any(w in text.lower() for w in ("upgrade", "subscribe", "go premium")):   # <- NEW
+        return upgrade_reply(user)
 
     if any(w in text.lower() for w in DEBT_WORDS):
         return debts_reply(user)
@@ -182,3 +195,25 @@ async def transcribe_note(audio: UploadFile = File(...)):
         print("TRANSCRIBE ERROR:", repr(ex))
         text = ""
     return {"transcript": text}
+
+@app.get("/upgrade/{user_id}")
+def upgrade(user_id: str):
+    db.get_or_create_user(user_id)
+    return RedirectResponse(payments.create_checkout_url(user_id), status_code=303)
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        payments.handle_event(payload, sig)
+    except Exception as ex:
+        print("WEBHOOK ERROR:", repr(ex))
+        raise HTTPException(status_code=400, detail="bad webhook")
+    return {"received": True}
+
+
+@app.get("/plan/{user_id}")
+def plan(user_id: str):
+    return {"plan": db.get_or_create_user(user_id)["plan"]}

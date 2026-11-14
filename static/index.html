@@ -143,7 +143,8 @@
   const chat = document.getElementById("chat");
   const form = document.getElementById("form");
   const input = document.getElementById("input");
-  const MONEY = /(₦[\d,]+)/;
+  const TOKEN = /(₦[\d,]+|https?:\/\/\S+)/;
+  const MONEY_ONLY = /^₦[\d,]+$/;
   let lastWho = null;
 
   function nowTime() {
@@ -157,12 +158,17 @@
 
     const body = document.createElement("span");
     body.className = "text";
-    text.split(MONEY).forEach((part) => {
-      if (who === "bot" && MONEY.test(part)) {
+    text.split(TOKEN).forEach((part) => {
+      if (who === "bot" && MONEY_ONLY.test(part)) {
         const s = document.createElement("span");
         s.className = "money";
         s.textContent = part;
         body.appendChild(s);
+      } else if (who === "bot" && /^https?:\/\//.test(part)) {
+        const a = document.createElement("a");
+        a.href = part;
+        a.textContent = "Upgrade with Stripe";
+        body.appendChild(a);
       } else {
         body.appendChild(document.createTextNode(part));
       }
@@ -240,13 +246,17 @@
     b.addEventListener("click", () => send(b.dataset.text))
   );
 
-  addMsg("Hello! Tell me what you sold or bought, the way you would tell a friend. Try one of these:", "bot");
-  addReplies([
-    "Sold 2 bags rice 45k each to Mama Chidi",
-    "I buy pepper 12k, transport 2,500",
-    "Who owe me?",
-  ]);
-
+  if (location.search.includes("paid=1")) {
+    history.replaceState(null, "", "/");
+    confirmPayment();
+  } else {
+    addMsg("Hello! Tell me what you sold or bought, the way you would tell a friend. Try one of these:", "bot");
+    addReplies([
+      "Sold 2 bags rice 45k each to Mama Chidi",
+      "I buy pepper 12k, transport 2,500",
+      "Who owe me?",
+    ]);
+  }
   const mic = document.getElementById("mic");
   let recorder, chunks = [], recording = false;
 
@@ -269,7 +279,7 @@ if (!recording) {
     recorder.start();
     recording = true;
     mic.classList.add("rec");
-    input.placeholder = "Recording... tap the mic to send";
+    input.placeholder = "Recording... tap the mic to stop";
   } else {
     recorder.stop();
     recording = false;
@@ -304,6 +314,20 @@ async function transcribeVoice(blob) {
 }
 
 mic.addEventListener("click", toggleRecording);
+
+  async function confirmPayment() {
+    addMsg("Payment received. Activating Premium...", "bot");
+    for (let i = 0; i < 15; i++) {
+      const res = await fetch("/plan/" + USER_ID);
+      const data = await res.json();
+      if (data.plan === "premium") {
+        addMsg("You're now on Premium. Debt reminders and invoices are unlocked.", "bot");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    addMsg("Your payment is still being confirmed. Try again in a moment.", "bot");
+  }
  
 </script>
 </body>
