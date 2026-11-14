@@ -1,13 +1,24 @@
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import db
+import voice
+import summary
 from extractor import extract_entries
 
 app = FastAPI()
 db.init_db()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/")
+def home():
+    return FileResponse("static/index.html")
 
 DEBT_WORDS = ("who owe", "who owes", "debt", "owing")
 
@@ -18,7 +29,7 @@ class ChatIn(BaseModel):
 
 
 def naira(n):
-    return f"₦{n:,.0f}"
+    return f"-₦{abs(n):,.0f}" if n < 0 else f"₦{n:,.0f}"
 
 
 def parse_amount(text):
@@ -81,24 +92,60 @@ def resolve_pending(user_id, text):
     return reply
 
 
-@app.post("/chat")
-def chat(body: ChatIn):
-    user = db.get_or_create_user(body.user_id)
-    text = body.message.strip()
+def summary_period(text):
+    t = text.lower()
+    if "weekly" in t or ("week" in t and ("summary" in t or "report" in t)):
+        return "week"
+    if "daily" in t or "summary" in t or "report" in t:
+        return "day"
+    return None
 
-    reply = resolve_pending(body.user_id, text)
+
+def summary_reply(user, period):
+    s = summary.get_summary(user["id"], period)
+    title = "Today's summary" if period == "day" else "Your week (last 7 days)"
+    if s["count"] == 0:
+        return f"{title}: no records yet. Tell me what you sold or bought."
+    lines = [
+        title,
+        f"Sales: {naira(s['sales'])}",
+        f"Expenses: {naira(s['expenses'])}",
+        f"Profit: {naira(s['profit'])}",
+        f"Cash received: {naira(s['cash_in'])}",
+    ]
+    if s["best"]:
+        lines.append(f"Best seller: {s['best'][0]} ({naira(s['best'][1])})")
+    if s["top_expense"]:
+        e = s["top_expense"]
+        lines.append(f"Biggest expense: {e['item']} ({naira(e['total'])})")
+    owed = sum(d["owed"] for d in db.get_debts(user["id"]))
+    if owed > 0:
+        lines.append(f"Still owed to you: {naira(owed)}")
+    return "\n".join(lines)
+
+
+def handle_message(user_id: str, text: str) -> str:
+    user = db.get_or_create_user(user_id)
+    text = text.strip()
+
+    reply = resolve_pending(user_id, text)
     if reply:
-        return {"reply": reply}
+        return reply
+
+    period = summary_period(text)
+    if period:
+        return summary_reply(user, period)
 
     if any(w in text.lower() for w in DEBT_WORDS):
-        return {"reply": debts_reply(user)}
+        return debts_reply(user)
 
     try:
         entries = [e.model_dump() for e in extract_entries(text)]
-    except Exception:
+    except Exception as ex:
+        print("EXTRACT ERROR:", repr(ex))
         entries = []
     if not entries:
-        return {"reply": "Sorry, I didn't get that. Try: Sold 2 bags rice 45k each"}
+        return "Sorry, I didn't get that. Try: Sold 2 bags rice 45k each"
 
     logged, to_ask = [], []
     for e in entries:
@@ -109,13 +156,29 @@ def chat(body: ChatIn):
             e["amount_paid"] = e["total"]
         if e["type"] != "sale" and e["amount_paid"] is None:
             e["amount_paid"] = e["total"]
-        db.add_entry(body.user_id, e)
+        db.add_entry(user_id, e)
         logged.append(describe(e))
 
     parts = []
     if logged:
         parts.append("Logged:\n" + "\n".join(logged))
     if to_ask:
-        db.set_pending(body.user_id, to_ask)
+        db.set_pending(user_id, to_ask)
         parts.append(ask(to_ask[0]))
-    return {"reply": "\n".join(parts)}
+    return "\n".join(parts)
+
+
+@app.post("/chat")
+def chat(body: ChatIn):
+    return {"reply": handle_message(body.user_id, body.message)}
+
+
+@app.post("/transcribe")
+async def transcribe_note(audio: UploadFile = File(...)):
+    data = await audio.read()
+    try:
+        text = voice.transcribe(audio.filename or "voice.webm", data)
+    except Exception as ex:
+        print("TRANSCRIBE ERROR:", repr(ex))
+        text = ""
+    return {"transcript": text}

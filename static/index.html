@@ -99,6 +99,9 @@
   }
   form button svg { width: 20px; height: 20px; fill: #fff; }
   button:focus-visible { outline: 3px solid #53bdeb; outline-offset: 2px; }
+
+  #mic.rec { background: #e53935; animation: pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(229,57,53,.5); } 50% { box-shadow: 0 0 0 10px rgba(229,57,53,0); } }
 </style>
 </head>
 <body>
@@ -120,10 +123,15 @@
   <div class="quick">
     <button type="button" data-text="Yes">Yes</button>
     <button type="button" data-text="No">No</button>
+    <button type="button" data-text="Daily summary">Today</button>
+    <button type="button" data-text="Weekly summary">This week</button>
     <button type="button" data-text="Who owe me?">Who owes me?</button>
   </div>
   <form id="form">
     <input id="input" placeholder="Type a sale or expense" autocomplete="off" aria-label="Type a sale or expense">
+    <button type="button" id="mic" aria-label="Record a voice note">
+        <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+    </button>
     <button aria-label="Send">
       <svg viewBox="0 0 24 24"><path d="M3 20.5v-6.9L12 12 3 10.4V3.5L22 12 3 20.5z"/></svg>
     </button>
@@ -238,6 +246,65 @@
     "I buy pepper 12k, transport 2,500",
     "Who owe me?",
   ]);
+
+  const mic = document.getElementById("mic");
+  let recorder, chunks = [], recording = false;
+
+async function toggleRecording() {
+if (!recording) {
+    let stream;
+    try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+    addMsg("I need microphone access to hear voice notes. Allow it in your browser and try again.", "bot");
+    return;
+    }
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      transcribeVoice(new Blob(chunks, { type: recorder.mimeType }));
+    };
+    recorder.start();
+    recording = true;
+    mic.classList.add("rec");
+    input.placeholder = "Recording... tap the mic to send";
+  } else {
+    recorder.stop();
+    recording = false;
+    mic.classList.remove("rec");
+    input.placeholder = "Type a sale or expense";
+  }
+}
+
+async function transcribeVoice(blob) {
+  input.value = "";
+  input.placeholder = "Listening to your voice note...";
+  input.disabled = true;
+
+  const fd = new FormData();
+  fd.append("audio", blob, blob.type.includes("mp4") ? "voice.mp4" : "voice.webm");
+
+  try {
+    const res = await fetch("/transcribe", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.transcript) {
+      input.value = data.transcript;
+    } else {
+      addMsg("I couldn't hear that. Hold the phone closer and record again.", "bot");
+    }
+  } catch (err) {
+    addMsg("I can't reach the server. Check your connection and try again.", "bot");
+  } finally {
+    input.disabled = false;
+    input.placeholder = "Type a sale or expense";
+    input.focus();
+  }
+}
+
+mic.addEventListener("click", toggleRecording);
+ 
 </script>
 </body>
 </html>
