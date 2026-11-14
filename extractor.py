@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from dotenv import load_dotenv
 from groq import Groq
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 load_dotenv()
 client = Groq()
@@ -12,12 +12,17 @@ MODEL = os.getenv("MODEL", "openai/gpt-oss-120b")
 
 
 class Entry(BaseModel):
-    type: Literal["sale", "expense", "Payment"]
-    item: str
+    type: Literal["sale", "expense", "payment"]
+    item: Optional[str] = None
     quantity: float = 1
     total: float
     customer: Optional[str] = None
     amount_paid: Optional[float] = None
+
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def default_quantity(cls, v):
+        return 1 if v is None else v
 
 
 SYSTEM = """You extract bookkeeping entries from messages written by Nigerian
@@ -55,6 +60,7 @@ if __name__ == "__main__":
     tests = [
         "Sold 2 bags rice 45k each to Mama Chidi, she pay 50k",
         "I buy pepper twelve thousand, I pay transport two thousand five hundred",
+        "Mama Chidi pay me 40k",
     ]
     for t in tests:
         print(t)
