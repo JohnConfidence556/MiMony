@@ -1,0 +1,20 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Secret Keys & Passwords (CRITICAL!)
+.env
+*.env
+# VS Code & OS junk files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local Databases (if you test with SQLite)
+*.sqlite3
+*.db
+
+__pycache__/
+*.py[cod]
+*$py.class
